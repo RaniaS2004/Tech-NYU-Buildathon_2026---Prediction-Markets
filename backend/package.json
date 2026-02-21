@@ -1,0 +1,23 @@
+{
+  "name": "prediction-market-aggregator",
+  "version": "1.0.0",
+  "description": "Real-time prediction market data aggregator for Polymarket and Kalshi",
+  "main": "aggregator.js",
+  "scripts": {
+    "start": "node aggregator.js",
+    "dev": "node --watch aggregator.js",
+    "agent": "node agent.js",
+    "api": "node api.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@supabase/supabase-js": "^2.43.0",
+    "dotenv": "^16.4.5",
+    "uuid": "^9.0.0",
+    "ws": "^8.17.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
