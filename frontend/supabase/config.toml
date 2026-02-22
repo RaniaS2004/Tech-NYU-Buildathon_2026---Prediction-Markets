@@ -1,0 +1,7 @@
+project_id = "prusygndpnnwcxbhvxvk"
+
+[functions.graph-data]
+verify_jwt = false
+
+[functions.scenario]
+verify_jwt = false
