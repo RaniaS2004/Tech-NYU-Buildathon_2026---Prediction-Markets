@@ -26,36 +26,13 @@ require('dotenv').config();
 const { supabase } = require('./supabaseClient');
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const POLL_INTERVAL_MS    = 30_000;   // Scan cadence (ms)
-const SPREAD_THRESHOLD    = 3.0;      // Min probability spread (%) to flag
+const POLL_INTERVAL_MS = 30_000;   // Scan cadence (ms)
+const SPREAD_THRESHOLD = 3.0;      // Min probability spread (%) to flag
 const LIQUIDITY_THRESHOLD = 500;      // Min liquidity depth (USD) required per side
 
-// ── Demo market fallbacks ─────────────────────────────────────────────────────
-// Synthetic probabilities for markets with no live WebSocket feed.
-// Identical to the values in agent.js so the hunter and classifier agree.
-// Pairs that resolve via this table are logged as 'SIMULATED_EXECUTION'
-// rather than 'ALERT' so the frontend can distinguish demo from live data.
-const DEMO_PROBS = {
-  demo_fed_hold_v1:          82,
-  demo_fed_hold_v2:          79,
-  demo_house_dem_v1:         34,
-  demo_house_dem_v2:         35,
-  demo_wti_above_70:         68,
-  demo_wti_at_or_below_70:   32,
-  demo_unemp_above_43:       55,
-  demo_unemp_at_or_below_43: 45,
-  demo_fed_hike_march:       12,
-  demo_gdp_below_20:         84,
-  demo_cpi_above_fed_target: 78,
-};
-
-// Synthetic liquidity assigned to every demo market so they clear the
-// LIQUIDITY_THRESHOLD check. Flagged clearly in the dashboard output.
-const DEMO_LIQUIDITY_USD = 1_000;
-
 // ── Session state ─────────────────────────────────────────────────────────────
-let sessionAlertCount   = 0;
-let cycleCount          = 0;
+let sessionAlertCount = 0;
+let cycleCount = 0;
 
 // ── Data layer ────────────────────────────────────────────────────────────────
 
@@ -127,7 +104,7 @@ async function fetchLatestSignals(eventIds) {
   for (const row of (data ?? [])) {
     if (latest[row.event_id] == null) {
       latest[row.event_id] = {
-        probability_pct:     row.probability_pct,
+        probability_pct: row.probability_pct,
         liquidity_depth_usd: row.liquidity_depth_usd ?? 0,
       };
     }
@@ -145,9 +122,9 @@ async function insertAlert(marketPair, spread, potentialProfitPct, status = 'ALE
   const { error } = await supabase
     .from('arbitrage_alerts')
     .insert({
-      timestamp:            new Date().toISOString(),
-      market_pair:          marketPair,
-      spread:               parseFloat(spread.toFixed(3)),
+      timestamp: new Date().toISOString(),
+      market_pair: marketPair,
+      spread: parseFloat(spread.toFixed(3)),
       potential_profit_pct: parseFloat(potentialProfitPct.toFixed(3)),
       status,
     });
@@ -166,42 +143,6 @@ async function insertAlert(marketPair, spread, potentialProfitPct, status = 'ALE
     return false;
   }
   return true;
-}
-
-// ── Signal resolution ─────────────────────────────────────────────────────────
-
-/**
- * Resolve the price signal for a single market_key.
- * Priority:
- *   1. Live data from market_signals (real money, real liquidity)
- *   2. DEMO_PROBS fallback (synthetic, for hackathon demo markets)
- *
- * Returns { probability_pct, liquidity_depth_usd, isDemo } or null if the
- * market has no live data and is not in DEMO_PROBS.
- *
- * @param {string} marketKey
- * @param {Object} metaMap    — market_key → event_id
- * @param {Object} signalMap  — event_id   → { probability_pct, liquidity_depth_usd }
- * @returns {{ probability_pct: number, liquidity_depth_usd: number, isDemo: boolean } | null}
- */
-function resolveSignal(marketKey, metaMap, signalMap) {
-  const eventId = metaMap[marketKey];
-  const live    = eventId ? signalMap[eventId] : null;
-
-  if (live != null && live.probability_pct != null) {
-    return { ...live, isDemo: false };
-  }
-
-  // Fall back to hardcoded demo probability if available.
-  if (DEMO_PROBS[marketKey] != null) {
-    return {
-      probability_pct:     DEMO_PROBS[marketKey],
-      liquidity_depth_usd: DEMO_LIQUIDITY_USD,
-      isDemo:              true,
-    };
-  }
-
-  return null;
 }
 
 // ── Core scan ─────────────────────────────────────────────────────────────────
@@ -231,33 +172,33 @@ async function runScan() {
   const signalMap = await fetchLatestSignals([...neededIds]);
 
   // Step 5 — evaluate each pair
-  let highestSpread  = 0;
-  let cycleAlerts    = 0;
+  let highestSpread = 0;
+  let cycleAlerts = 0;
   const opportunities = [];
 
   for (const { market_key_a, market_key_b } of pairs) {
-    const sigA = resolveSignal(market_key_a, metaMap, signalMap);
-    const sigB = resolveSignal(market_key_b, metaMap, signalMap);
+    const idA = metaMap[market_key_a];
+    const idB = metaMap[market_key_b];
 
-    // Skip pair if either side has no live data and is not a known demo market.
+    const sigA = idA ? signalMap[idA] : null;
+    const sigB = idB ? signalMap[idB] : null;
+
+    // Guard: skip pair if either side has missing or null price data
     if (sigA == null || sigB == null) continue;
+    if (sigA.probability_pct == null || sigB.probability_pct == null) continue;
 
-    const spread     = Math.abs(sigA.probability_pct - sigB.probability_pct);
+    const spread = Math.abs(sigA.probability_pct - sigB.probability_pct);
     const liquidityA = sigA.liquidity_depth_usd ?? 0;
     const liquidityB = sigB.liquidity_depth_usd ?? 0;
-    const isDemo     = sigA.isDemo || sigB.isDemo;
 
     if (spread > highestSpread) highestSpread = spread;
 
-    // Flag as Alpha Opportunity only if spread AND liquidity thresholds both pass.
+    // Flag as Alpha Opportunity only if spread AND liquidity thresholds both pass
     if (spread > SPREAD_THRESHOLD && liquidityA > LIQUIDITY_THRESHOLD && liquidityB > LIQUIDITY_THRESHOLD) {
-      const marketPair    = `${market_key_a} ↔ ${market_key_b}`;
-      const potentialProfit = spread;
-      // Demo pairs are logged as SIMULATED_EXECUTION so the frontend can
-      // distinguish them from real live-market alerts.
-      const alertStatus   = isDemo ? 'SIMULATED_EXECUTION' : 'ALERT';
+      const marketPair = `${market_key_a} ↔ ${market_key_b}`;
+      const potentialProfit = spread; // Theoretical edge = full spread on equivalent markets
 
-      const inserted = await insertAlert(marketPair, spread, potentialProfit, alertStatus);
+      const inserted = await insertAlert(marketPair, spread, potentialProfit, 'ALERT');
       if (inserted) {
         sessionAlertCount++;
         cycleAlerts++;
@@ -267,13 +208,11 @@ async function runScan() {
         marketPair,
         spread,
         potentialProfit,
-        probA:      sigA.probability_pct,
-        probB:      sigB.probability_pct,
+        probA: sigA.probability_pct,
+        probB: sigB.probability_pct,
         liquidityA,
         liquidityB,
-        isDemo,
         inserted,
-        alertStatus,
       });
     }
   }
@@ -285,9 +224,9 @@ async function runScan() {
 // ── Terminal dashboard ────────────────────────────────────────────────────────
 
 function printDashboard(pairsMonitored, highestSpread, opportunities, warning, elapsedMs = 0) {
-  const ts      = new Date().toISOString();
-  const wide    = '═'.repeat(62);
-  const thin    = '─'.repeat(62);
+  const ts = new Date().toISOString();
+  const wide = '═'.repeat(62);
+  const thin = '─'.repeat(62);
 
   console.log(`\n${wide}`);
   console.log(`  ARBITRAGE HUNTER  |  Cycle #${String(cycleCount).padEnd(4)}  |  ${ts}`);
@@ -306,9 +245,8 @@ function printDashboard(pairsMonitored, highestSpread, opportunities, warning, e
     console.log('  ALPHA OPPORTUNITIES');
     console.log(thin);
     for (const opp of opportunities) {
-      const dbStatus  = opp.inserted ? '✓ logged' : '✗ log failed';
-      const typeLabel = opp.isDemo ? '[DEMO — SIMULATED_EXECUTION]' : '[LIVE — ALERT]';
-      console.log(`  PAIR   : ${opp.marketPair}  ${typeLabel}`);
+      const dbStatus = opp.inserted ? '✓ logged' : '✗ log failed';
+      console.log(`  PAIR   : ${opp.marketPair}`);
       console.log(`  SPREAD : ${opp.spread.toFixed(2)}%  →  A: ${opp.probA.toFixed(1)}%  |  B: ${opp.probB.toFixed(1)}%`);
       console.log(`  LIQUID : A = $${opp.liquidityA.toFixed(0).padStart(8)}    B = $${opp.liquidityB.toFixed(0).padStart(8)}`);
       console.log(`  EDGE   : ~${opp.potentialProfit.toFixed(2)}% theoretical profit  [${dbStatus}]`);
@@ -335,7 +273,7 @@ function shutdown(signal) {
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
