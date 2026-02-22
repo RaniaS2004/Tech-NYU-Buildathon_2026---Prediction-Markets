@@ -19,6 +19,7 @@
 require('dotenv').config();
 const http = require('http');
 const { supabase } = require('./supabaseClient');
+const { predictScenario } = require('./scenario_engine');
 
 const PORT               = parseInt(process.env.API_PORT ?? '3000', 10);
 const HUB_LINK_THRESHOLD = 3;   // implied + correlated links required to be a hub
@@ -130,23 +131,56 @@ async function buildGraphData() {
   });
 
   // ── Links ─────────────────────────────────────────────────────────────────
-  const links = (relationships ?? []).map(r => ({
-    source:               r.market_key_a,
-    target:               r.market_key_b,
-    type:                 r.relationship_type,
-    color:                TYPE_COLOR[r.relationship_type] ?? '#9E9E9E',
-    confidence:           r.confidence_score,
-    label:                r.logic_justification,
-    // Existing arbitrage fields
-    arbitrage_flag:       r.arbitrage_flag,
-    probability_spread:   r.probability_spread,
-    // Advanced Macro Logic Agent v2 fields
-    impact_direction:     r.impact_direction,
-    correlation_strength: r.correlation_strength,
-    logical_layer:        r.logical_layer,
-    vantage_insight:      r.vantage_insight,
-    risk_alert:           r.risk_alert,
-  }));
+
+  // Type-aware fallback copy used when logic_justification and vantage_insight
+  // are both absent — guarantees every edge has a non-null justification string.
+  const TYPE_FALLBACK = {
+    equivalent:         'These markets track the same underlying event — prices should converge to ~100% combined.',
+    mutually_exclusive: 'These markets are strict logical opposites — if one resolves YES, the other must resolve NO.',
+    implied:            'Market A resolving YES structurally implies Market B also resolves YES.',
+    correlated:         'These markets share a causal or statistical relationship — movements in one signal movements in the other.',
+  };
+
+  const links = (relationships ?? []).map(r => {
+    // Justification priority:
+    //   1. logic_justification  — full AI-generated economic reasoning (all types)
+    //   2. vantage_insight      — punchy ≤10-word headline (all types)
+    //   3. TYPE_FALLBACK        — static description by relationship_type
+    const justification =
+      (r.logic_justification ?? '').trim() ||
+      (r.vantage_insight     ?? '').trim() ||
+      TYPE_FALLBACK[r.relationship_type]   ||
+      'No justification available.';
+
+    // Spread context appended for equivalent / mutually_exclusive edges
+    // so the hover tooltip surfaces the pricing gap immediately.
+    const spreadNote =
+      (r.relationship_type === 'equivalent' || r.relationship_type === 'mutually_exclusive') &&
+      r.probability_spread != null
+        ? ` | Spread: ${r.probability_spread.toFixed(1)}%${r.arbitrage_flag ? ' ⚠ ARBITRAGE' : ''}`
+        : '';
+
+    return {
+      source:               r.market_key_a,
+      target:               r.market_key_b,
+      type:                 r.relationship_type,
+      color:                TYPE_COLOR[r.relationship_type] ?? '#9E9E9E',
+      confidence:           r.confidence_score,
+      // Single field Lovable should bind to for hover tooltips — always populated.
+      justification:        justification + spreadNote,
+      // Kept for backwards compat with any existing frontend reads.
+      label:                r.logic_justification,
+      // Arbitrage fields
+      arbitrage_flag:       r.arbitrage_flag,
+      probability_spread:   r.probability_spread,
+      // Macro Logic Agent v2 fields
+      impact_direction:     r.impact_direction,
+      correlation_strength: r.correlation_strength,
+      logical_layer:        r.logical_layer,
+      vantage_insight:      r.vantage_insight,
+      risk_alert:           r.risk_alert,
+    };
+  });
 
   // ── Summary stats ─────────────────────────────────────────────────────────
   const typeBreakdown = {};
@@ -233,9 +267,49 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // POST /api/scenario  — Scenario Stress-Testing Engine
+  // Body: { "query": "CPI comes in at 3.2%" }
+  if (req.method === 'POST' && pathname === '/api/scenario') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { query } = JSON.parse(body);
+        if (!query || typeof query !== 'string' || !query.trim()) {
+          json(res, 400, { error: 'Request body must include a non-empty "query" string.' });
+          return;
+        }
+        console.log(`[API] POST /api/scenario  query="${query}"`);
+        const report = await predictScenario(query.trim());
+        json(res, 200, report);
+      } catch (err) {
+        console.error('[API] /api/scenario error:', err.message);
+        json(res, 500, { error: err.message });
+      }
+    });
+    return;
+  }
+
+  // GET /api/scenarios  — list saved reports (newest first)
+  if (req.method === 'GET' && pathname === '/api/scenarios') {
+    try {
+      const { data, error } = await supabase
+        .from('scenario_reports')
+        .select('id, created_at, user_query, target_market, assumed_change, direction, first_order_count, second_order_count, executive_summary')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) throw new Error(error.message);
+      json(res, 200, data ?? []);
+    } catch (err) {
+      console.error('[API] /api/scenarios error:', err.message);
+      json(res, 500, { error: err.message });
+    }
+    return;
+  }
+
   json(res, 404, {
     error: 'Not found',
-    available_endpoints: ['/api/graph-data', '/health'],
+    available_endpoints: ['/api/graph-data', '/api/scenario', '/api/scenarios', '/health'],
   });
 });
 

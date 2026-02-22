@@ -7,7 +7,9 @@
     "start": "node aggregator.js",
     "dev": "node --watch aggregator.js",
     "agent": "node agent.js",
-    "api": "node api.js"
+    "api": "node api.js",
+    "hunter": "node arbitrage_hunter.js",
+    "scenario": "node scenario_engine.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

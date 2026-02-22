@@ -4,3 +4,6 @@ node_modules/
 .env
 .env.*
 
+# PM2 logs (files auto-created at runtime, keep the directory via .gitkeep)
+backend/logs/*.log
+
