@@ -12,6 +12,11 @@ This project is an **intelligence terminal** that aggregates live market data fr
 
 ---
 
+## Live Demo
+Production Deployment: https://converge-dashboard.lovable.app/
+
+---
+
 ## Features
 
 - **Real-time aggregation** — WebSocket connections to Polymarket CLOB and Kalshi v2, normalized into a unified schema
